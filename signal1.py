@@ -4,11 +4,11 @@ import threading
 try:
     import pygame
 except ImportError:
-    print("pygame未インストール。信号の視覚的表示はありません")
+    print("pygame not installed. No visual signal display")
     pygame = None
 
 # MQTTブローカー設定 (Mac)
-BROKER_HOST = "192.168.1.100"  # Macのローカルネットワークアドレスに変更
+BROKER_HOST = "10.21.89.67"  # Macのローカルネットワークアドレス
 BROKER_PORT = 1883
 
 # トピック定義
@@ -28,7 +28,7 @@ SIGNAL_CYCLE = [
 ]
 
 def on_connect(client, userdata, flags, rc):
-    print(f"MQTTブローカーに接続: {rc}")
+    print(f"Connected to MQTT Broker: {rc}")
     client.subscribe(TOPIC_SIGNAL_PING)
 
 def on_message(client, userdata, msg):
@@ -40,29 +40,29 @@ def on_message(client, userdata, msg):
         client.publish(TOPIC_SIGNAL_PONG, payload)
 
 def status_publisher_thread():
-    """定期的にステータスを送信"""
+    """Periodically publish status"""
     global client, current_signal
     
     while True:
         client.publish(TOPIC_SIGNAL_STATUS, current_signal)
-        time.sleep(0.1)  # 100msごとに送信
+        time.sleep(0.1)  # Send every 100ms
 
 def signal_cycle_thread():
-    """信号サイクルを管理"""
+    """Manage signal cycle"""
     global current_signal
     
     while True:
         for signal_color, duration in SIGNAL_CYCLE:
             current_signal = signal_color
-            print(f"信号: {signal_color} ({duration}秒)")
+            print(f"Signal: {signal_color} ({duration}s)")
             time.sleep(duration)
 
 def display_signal_pygame():
-    """Pygameで信号を視覚的に表示"""
+    """Display signal visually with Pygame"""
     global current_signal
     
     if pygame is None:
-        print("Pygameが利用できません")
+        print("Pygame not available")
         return
     
     pygame.init()
@@ -128,62 +128,62 @@ def display_signal_pygame():
         pygame.quit()
 
 def display_signal_console():
-    """コンソールで信号を表示"""
+    """Display signal in console"""
     global current_signal
     
     while True:
-        print(f"\r現在の信号: {current_signal}   ", end='', flush=True)
+        print(f"\rCurrent signal: {current_signal}   ", end='', flush=True)
         time.sleep(0.5)
 
 def main():
     global client
     
-    print("=== Signal1 起動 ===")
+    print("=== Signal1 Starting ===")
     
-    # MQTT接続
+    # MQTT connection
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
     
-    print(f"MQTTブローカーに接続中: {BROKER_HOST}:{BROKER_PORT}")
+    print(f"Connecting to MQTT Broker: {BROKER_HOST}:{BROKER_PORT}")
     try:
         client.connect(BROKER_HOST, BROKER_PORT, 60)
     except Exception as e:
-        print(f"MQTT接続エラー: {e}")
-        print("BROKER_HOSTをMacのIPアドレスに変更してください")
+        print(f"MQTT connection error: {e}")
+        print("Please change BROKER_HOST to your Mac's IP address")
         return
     
     client.loop_start()
     
-    # バックグラウンドスレッド起動
+    # Start background threads
     status_thread = threading.Thread(target=status_publisher_thread, daemon=True)
     status_thread.start()
     
     cycle_thread = threading.Thread(target=signal_cycle_thread, daemon=True)
     cycle_thread.start()
     
-    print("準備完了。信号サイクル開始...")
+    print("Ready. Starting signal cycle...")
     time.sleep(1)
     
-    # 表示モード選択
+    # Display mode selection
     if pygame is not None:
         try:
             display_signal_pygame()
         except Exception as e:
-            print(f"Pygame表示エラー: {e}")
-            print("コンソールモードに切り替えます")
+            print(f"Pygame display error: {e}")
+            print("Switching to console mode")
             try:
                 while True:
                     display_signal_console()
             except KeyboardInterrupt:
-                print("\n終了します")
+                print("\nExiting")
     else:
-        # Pygameがない場合はコンソール表示
+        # Console display if no Pygame
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("\n終了します")
+            print("\nExiting")
     
     client.loop_stop()
     client.disconnect()
