@@ -33,19 +33,31 @@ remote_processes = []
 
 client = None
 
+def output_reader(process, name):
+    """Read and print output from remote process"""
+    for line in iter(process.stdout.readline, b''):
+        if line:
+            print(f"[{name}] {line.decode().strip()}")
+
 def start_remote_script(host, script_path, name):
     """Start script on remote host"""
     print(f"Starting {name} ({host})...")
     try:
         # Execute remote script via SSH
         process = subprocess.Popen(
-            ['ssh', host, f'python3 {script_path}'],
+            ['ssh', host, f'python3 -u {script_path}'],  # -u for unbuffered output
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE
+            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
+            stdin=subprocess.PIPE,
+            bufsize=1
         )
         remote_processes.append((process, name, host))
         print(f"Started {name} (PID: {process.pid})")
+        
+        # Start thread to read output
+        output_thread = threading.Thread(target=output_reader, args=(process, name), daemon=True)
+        output_thread.start()
+        
         return process
     except Exception as e:
         print(f"Failed to start {name}: {e}")
@@ -146,39 +158,57 @@ def control_car():
     """Car control logic"""
     global client, signal_status
     
-    print("Moving car forward...")
+    print("\n" + "="*50)
+    print("[MAIN] Starting car control sequence")
+    print("="*50)
+    
+    print("[MAIN] Sending forward command: forward:100")
     client.publish(TOPIC_CAR_CONTROL, "forward:100")
+    print("[MAIN] Command published to topic: car2/control")
     
     # Move for ~1 second (approximately 10cm)
-    print("Moving for 10cm (~1 second)...")
+    print("[MAIN] Moving for 10cm (~1 second)...")
     time.sleep(1)
     
     # Stop and check signal
+    print("[MAIN] Sending stop command")
     client.publish(TOPIC_CAR_CONTROL, "stop")
-    print(f"Stopped. Checking signal...")
+    print("[MAIN] Stop command published")
+    print("[MAIN] Checking signal...")
     time.sleep(0.5)
     
     # Check signal
-    print(f"Current signal: {signal_status['color']}")
+    print(f"[MAIN] Current signal: {signal_status['color']}")
     
     if signal_status['color'] in ['RED', 'YELLOW']:
-        print(f"Signal is {signal_status['color']}. Waiting for GREEN...")
+        print(f"[MAIN] Signal is {signal_status['color']}. Waiting for GREEN...")
         
         # Wait for green signal
         while signal_status['color'] != 'GREEN':
+            print(f"[MAIN] Still waiting... Signal is {signal_status['color']}")
             time.sleep(0.5)
         
-        print("Signal turned GREEN! Moving forward again")
+        print("[MAIN] Signal turned GREEN! Moving forward again")
+        print("[MAIN] Sending forward command: forward:100")
         client.publish(TOPIC_CAR_CONTROL, "forward:100")
-        time.sleep(2)  # Move forward for 2 seconds
+        print("[MAIN] Moving for 2 seconds...")
+        time.sleep(2)
+        print("[MAIN] Sending stop command")
         client.publish(TOPIC_CAR_CONTROL, "stop")
-        print("Stopped")
+        print("[MAIN] Stopped")
     else:
-        print("Signal is GREEN. Continuing forward")
+        print("[MAIN] Signal is GREEN. Continuing forward")
+        print("[MAIN] Sending forward command: forward:100")
         client.publish(TOPIC_CAR_CONTROL, "forward:100")
-        time.sleep(2)  # Move forward for 2 seconds
+        print("[MAIN] Moving for 2 seconds...")
+        time.sleep(2)
+        print("[MAIN] Sending stop command")
         client.publish(TOPIC_CAR_CONTROL, "stop")
-        print("Stopped")
+        print("[MAIN] Stopped")
+    
+    print("="*50)
+    print("[MAIN] Car control sequence complete")
+    print("="*50 + "\n")
 
 def main():
     global client
