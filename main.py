@@ -2,6 +2,7 @@ import paho.mqtt.client as mqtt
 import time
 import csv
 import threading
+import subprocess
 from datetime import datetime
 from collections import deque
 
@@ -13,7 +14,6 @@ BROKER_PORT = 1883
 TOPIC_CAR_PING = "car2/ping"
 TOPIC_CAR_PONG = "car2/pong"
 TOPIC_CAR_CONTROL = "car2/control"
-TOPIC_CAR_STATUS = "car2/status"
 
 TOPIC_SIGNAL_PING = "signal1/ping"
 TOPIC_SIGNAL_PONG = "signal1/pong"
@@ -26,25 +26,57 @@ car_ping_times = {}
 signal_ping_times = {}
 
 # デバイスステータス
-car_status = {"distance": 0, "moving": False}
 signal_status = {"color": "RED"}
 
-# 制御フラグ
-car_moved_first_10cm = False
-waiting_for_green = False
+# リモートプロセス
+remote_processes = []
 
 client = None
 
+def start_remote_script(host, script_path, name):
+    """Start script on remote host"""
+    print(f"Starting {name} ({host})...")
+    try:
+        # Execute remote script via SSH
+        process = subprocess.Popen(
+            ['ssh', host, f'python3 {script_path}'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE
+        )
+        remote_processes.append((process, name, host))
+        print(f"Started {name} (PID: {process.pid})")
+        return process
+    except Exception as e:
+        print(f"Failed to start {name}: {e}")
+        return None
+
+def stop_remote_processes():
+    """Stop remote processes"""
+    print("\nStopping remote processes...")
+    for process, name, host in remote_processes:
+        print(f"Stopping {name}...")
+        try:
+            # Terminate process via SSH
+            subprocess.run(['ssh', host, 'pkill -f "python3.*py"'], 
+                         timeout=5, capture_output=True)
+        except Exception as e:
+            print(f"Error stopping {name}: {e}")
+        
+        try:
+            process.terminate()
+            process.wait(timeout=3)
+        except:
+            process.kill()
+
 def on_connect(client, userdata, flags, rc):
-    print(f"MQTTブローカーに接続: {rc}")
+    print(f"Connected to MQTT Broker: {rc}")
     client.subscribe(TOPIC_CAR_PONG)
-    client.subscribe(TOPIC_CAR_STATUS)
     client.subscribe(TOPIC_SIGNAL_PONG)
     client.subscribe(TOPIC_SIGNAL_STATUS)
 
 def on_message(client, userdata, msg):
-    global car_latency_queue, signal_latency_queue
-    global car_status, signal_status
+    global car_latency_queue, signal_latency_queue, signal_status
     
     topic = msg.topic
     payload = msg.payload.decode()
@@ -62,20 +94,8 @@ def on_message(client, userdata, msg):
             latency = (time.time() - signal_ping_times[ping_id]) * 1000
             signal_latency_queue.append((datetime.now(), latency))
             del signal_ping_times[ping_id]
-            
-    elif topic == TOPIC_CAR_STATUS:
-        # ステータス: "distance:XX,moving:true/false"
-        parts = payload.split(',')
-        for part in parts:
-            if ':' in part:
-                key, value = part.split(':', 1)
-                if key == "distance":
-                    car_status["distance"] = float(value)
-                elif key == "moving":
-                    car_status["moving"] = value.lower() == "true"
                     
     elif topic == TOPIC_SIGNAL_STATUS:
-        # ステータス: "RED", "GREEN", "YELLOW"
         signal_status["color"] = payload
 
 def save_latency_to_csv(filename, latency_queue):
@@ -123,56 +143,61 @@ def latency_measurement_thread():
         save_latency_to_csv('signal1_latency.csv', signal_latency_queue)
 
 def control_car():
-    """車の制御ロジック"""
-    global client, car_moved_first_10cm, waiting_for_green
-    global car_status, signal_status
+    """Car control logic"""
+    global client, signal_status
     
-    print("車を前進させます (10cm)")
+    print("Moving car forward...")
     client.publish(TOPIC_CAR_CONTROL, "forward:100")
     
-    # 10cm移動を待つ
-    start_time = time.time()
-    timeout = 30
+    # Move for ~1 second (approximately 10cm)
+    print("Moving for 10cm (~1 second)...")
+    time.sleep(1)
     
-    while time.time() - start_time < timeout:
-        if car_status["distance"] >= 10:
-            print(f"10cm移動完了 (実際: {car_status['distance']:.2f}cm)")
-            car_moved_first_10cm = True
-            break
-        time.sleep(0.1)
+    # Stop and check signal
+    client.publish(TOPIC_CAR_CONTROL, "stop")
+    print(f"Stopped. Checking signal...")
+    time.sleep(0.5)
     
-    if not car_moved_first_10cm:
-        print("タイムアウト: 10cm移動が確認できませんでした")
-        return
-    
-    # 信号をチェック
-    print(f"現在の信号: {signal_status['color']}")
+    # Check signal
+    print(f"Current signal: {signal_status['color']}")
     
     if signal_status['color'] in ['RED', 'YELLOW']:
-        print(f"信号が{signal_status['color']}です。緑になるまで待機します...")
-        waiting_for_green = True
+        print(f"Signal is {signal_status['color']}. Waiting for GREEN...")
         
-        # 緑信号を待つ
-        while waiting_for_green:
-            if signal_status['color'] == 'GREEN':
-                print("信号が緑になりました！再び前進します")
-                client.publish(TOPIC_CAR_CONTROL, "forward:100")
-                waiting_for_green = False
-                time.sleep(2)  # 前進時間
-                client.publish(TOPIC_CAR_CONTROL, "stop")
-                break
-            time.sleep(0.1)
-    else:
-        print("信号が緑です。そのまま前進を続けます")
-        time.sleep(2)  # 前進時間
+        # Wait for green signal
+        while signal_status['color'] != 'GREEN':
+            time.sleep(0.5)
+        
+        print("Signal turned GREEN! Moving forward again")
+        client.publish(TOPIC_CAR_CONTROL, "forward:100")
+        time.sleep(2)  # Move forward for 2 seconds
         client.publish(TOPIC_CAR_CONTROL, "stop")
+        print("Stopped")
+    else:
+        print("Signal is GREEN. Continuing forward")
+        client.publish(TOPIC_CAR_CONTROL, "forward:100")
+        time.sleep(2)  # Move forward for 2 seconds
+        client.publish(TOPIC_CAR_CONTROL, "stop")
+        print("Stopped")
 
 def main():
     global client
     
-    print("=== 交差点実験開始 ===")
-    print("MQTTブローカーに接続中...")
+    print("=== Traffic Light Experiment Started ===")
     
+    # Start remote scripts
+    print("\n--- Starting Remote Devices ---")
+    signal_proc = start_remote_script('signal1', '~/signal1.py', 'signal1 (traffic light)')
+    time.sleep(2)
+    car_proc = start_remote_script('car2', '~/car2.py', 'car2 (vehicle)')
+    time.sleep(3)
+    
+    if signal_proc is None or car_proc is None:
+        print("ERROR: Failed to start remote devices")
+        stop_remote_processes()
+        return
+    
+    print("\n--- Connecting to MQTT Broker ---")
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
@@ -180,34 +205,35 @@ def main():
     client.connect(BROKER_HOST, BROKER_PORT, 60)
     client.loop_start()
     
-    # 接続待機
+    # Wait for connection
     time.sleep(2)
     
-    # レイテンシ測定スレッド開始
+    # Start latency measurement thread
     latency_thread = threading.Thread(target=latency_measurement_thread, daemon=True)
     latency_thread.start()
     
-    print("デバイスの準備を待っています...")
+    print("Waiting for devices to be ready...")
     time.sleep(5)
     
-    # 車の制御開始
+    # Start car control
     try:
         control_car()
         
-        print("\n実験完了！")
-        print("レイテンシデータは car2_latency.csv と signal1_latency.csv に保存されました")
+        print("\nExperiment Complete!")
+        print("Latency data saved to car2_latency.csv and signal1_latency.csv")
         
-        # 実験終了後もレイテンシ測定を続ける
-        print("\nレイテンシ測定を継続します (Ctrl+Cで終了)")
+        # Continue latency measurement after experiment
+        print("\nContinuing latency measurement (Press Ctrl+C to exit)")
         while True:
             time.sleep(1)
             
     except KeyboardInterrupt:
-        print("\n実験を終了します")
+        print("\nExiting experiment")
     finally:
         client.publish(TOPIC_CAR_CONTROL, "stop")
         client.loop_stop()
         client.disconnect()
+        stop_remote_processes()
 
 if __name__ == "__main__":
     main()
