@@ -39,6 +39,34 @@ ifconfig | grep "inet " | grep -v 127.0.0.1
 
 ## 実験の実行
 
+### たった 1 つのコマンドで実行！
+
+```bash
+cd /Users/redkarim/Documents/picar_latency
+python3 main.py
+```
+
+または
+
+```bash
+cd /Users/redkarim/Documents/picar_latency
+./run_experiment.sh
+```
+
+**注**: main.py が自動的に:
+
+1. signal1 に SSH で接続して信号スクリプトを起動
+2. car2 に SSH で接続して車のスクリプトを起動
+3. 実験を開始
+4. Ctrl+C で終了すると、すべてのリモートプロセスも自動停止
+
+---
+
+### 手動で起動する場合（旧方式）
+
+<details>
+<summary>クリックして展開</summary>
+
 ### ステップ 1: signal1 を起動 (別のターミナル)
 
 ```bash
@@ -59,6 +87,8 @@ python3 ~/car2.py
 cd /Users/redkarim/Documents/picar_latency
 python3 main.py
 ```
+
+</details>
 
 ## 実験の流れ
 
